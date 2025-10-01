@@ -1,0 +1,104 @@
+
+
+Этот контракт позволяет пользователю (A) предложить токены X в обмен на токены Y. Второй пользователь (B) может принять сделку, предоставив Y, и получить X.
+
+```javascript
+// src/contract.js
+
+import { Far } from '@endo/far';
+import { AssetKind, AmountMath } from '@agoric/ertp';
+
+// Имя контракта
+export const start = (zcf) => {
+  // 1. Создаем функцию для предложения, которая будет выполнена, когда сделка будет заключена
+  const makeMatcher = (seat) => {
+    // Получаем предложение, которое сделал первый участник (User A)
+    const offer = seat.getProposal();
+    
+    // Получаем 'want' (что хочет получить A) и 'give' (что дает A)
+    const wanted = offer.want.TokenY; // A хочет Y
+    const given = offer.give.TokenX; // A дает X
+
+    /**
+     * @notice Handler для второго участника (User B), который принимает сделку
+     * @param secondSeat {ZCFSeat} Место второго участника
+     */
+    const secondPartyHandler = (secondSeat) => {
+      // B должен дать то, что A хочет, и хотеть то, что A дает
+      const secondOffer = secondSeat.getProposal();
+      
+      // Проверяем, что B дает то, что хотел A
+      if (!AmountMath.isEqual(secondOffer.give.TokenY, wanted)) {
+        secondSeat.fail('Offer rejected: Did not give the expected amount of Token Y.');
+        seat.fail('Offer failed: Counterparty did not meet requirements.');
+        return;
+      }
+
+      // Проверяем, что B хочет то, что дает A
+      if (!AmountMath.isEqual(secondOffer.want.TokenX, given)) {
+        secondSeat.fail('Offer rejected: Did not want the expected amount of Token X.');
+        seat.fail('Offer failed: Counterparty did not meet requirements.');
+        return;
+      }
+
+      // 2. Если все условия выполнены: Сделка!
+      
+      // Перемещаем токены: X от A к B, Y от B к A
+      zcf.atomicRearrange(
+        // Перемещение Token X: от A (seat) к B (secondSeat)
+        [[seat, secondSeat, given]], 
+        // Перемещение Token Y: от B (secondSeat) к A (seat)
+        [[secondSeat, seat, wanted]]
+      );
+      
+      // Уведомляем участников об успешном завершении
+      seat.exit();
+      secondSeat.exit();
+      
+      return 'The swap was successful!';
+    };
+
+    // 3. Возвращаем публичный фасет, который позволяет другим присоединиться к сделке
+    return Far('secondPartyInvitation', {
+      makeSecondInvitation: () =>
+        zcf.makeInvitation(secondPartyHandler, 'secondParty'),
+    });
+  };
+
+  // 4. Возвращаем публичный фасет для первого участника
+  const publicFacet = Far('publicFacet', {
+    makeFirstInvitation: () => zcf.makeInvitation(makeMatcher, 'firstParty'),
+  });
+
+  return { publicFacet };
+};
+```
+
+### 2\. Запуск и развертывание (Команды)
+
+Чтобы этот код работал, вам нужно использовать инструменты Agoric.
+
+1.  **Инициализация проекта:** (Предполагается, что у вас установлен `agoric-sdk`)
+
+    ```bash
+    agoric init simpleswap
+    cd simpleswap
+    ```
+
+2.  **Установка зависимостей:**
+
+    ```bash
+    npm install
+    ```
+
+3.  **Развертывание контракта:**
+
+    ```bash
+    agoric deploy contract.js
+    ```
+
+    (Эта команда развернет контракт в вашей локальной Agoric Testnet)
+
+4.  **Взаимодействие:** Теперь вы можете использовать **JavaScript CLI** (`agoric run`) для отправки предложения (`makeFirstInvitation`) и его принятия (`makeSecondInvitation`).
+
+Это минимальный работающий пример, который демонстрирует, как **Zoe** обеспечивает атомарность (неделимость) сделки: токены либо обмениваются полностью, либо оба участника получают свои токены обратно.
